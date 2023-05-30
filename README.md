@@ -7,7 +7,7 @@ grab the latest version of zig: https://github.com/ziglang/zig
 then just build this locally
 
 ## How to use
-when trying to run pedol it needs a config "map.toml"
+when trying to run pedol it needs a config "map.toml"<br />
 it needs to be in the same folder as the executable and should contain:
 ```Toml
 # The vendor id for your Elgato Pedal
