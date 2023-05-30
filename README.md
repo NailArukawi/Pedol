@@ -9,7 +9,7 @@ then just build this locally
 ## How to use
 when trying to run pedol it needs a config "map.toml"
 it needs to be in the same folder as the executable and should contain:
-```
+```Toml
 # The vendor id for your Elgato Pedal
 vendor_id = 0x0fd9
 
