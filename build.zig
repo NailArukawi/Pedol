@@ -29,7 +29,6 @@ pub fn build(b: *std.Build) void {
     // step when running `zig build`).
     exe.linkLibC();
     exe.linkSystemLibrary("hidapi-libusb");
-    //exe.linkSystemLibrary("linux");
     b.installArtifact(exe);
 
     // This *creates* a Run step in the build graph, to be executed when another
