@@ -79,13 +79,10 @@ const HIDHandle = struct {
     inner: *c.hid_device,
 
     pub fn open(vendor_id: c_ushort, product_id: c_ushort, serial_number: [*c]const c_int) !@This() {
-        var handle = c.hid_open(vendor_id, product_id, serial_number);
-        if (handle == null) {
-            return HIDError.device_not_found;
-        }
+        var handle = c.hid_open(vendor_id, product_id, serial_number) orelse return HIDError.device_not_found;
 
         return @This(){
-            .inner = handle.?,
+            .inner = handle,
         };
     }
 

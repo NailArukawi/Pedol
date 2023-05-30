@@ -5,17 +5,14 @@ const PedalEvent = @import("pedal.zig").PedalEvent;
 
 const c = @cImport({
     @cInclude("hidapi/hidapi.h");
-    @cInclude("string.h");
     @cInclude("unistd.h");
     @cInclude("linux/uinput.h");
 });
 
-var config: *toml.Table = undefined;
-
 var keys: [12]c_ushort = undefined;
-var l_key: []c_ushort = undefined;
-var m_key: []c_ushort = undefined;
-var r_key: []c_ushort = undefined;
+var l_keys: []c_ushort = undefined;
+var m_keys: []c_ushort = undefined;
+var r_keys: []c_ushort = undefined;
 
 var vendor_id: c_ushort = undefined;
 var product_id: c_ushort = undefined;
@@ -30,98 +27,71 @@ pub fn main() !void {
     defer pedal.deinit();
 
     // setup Viritual input
-    var usetup: c.uinput_setup = undefined;
-
     const flags = std.os.linux.O.WRONLY | std.os.linux.O.NONBLOCK;
     var fd = try std.os.open("/dev/uinput", flags, 0x777);
 
     // register the peys Pedol can press
-    const key_count = l_key.len + m_key.len + r_key.len;
-    for (keys[0 .. key_count + 1]) |key| {
-        register_key(fd, key);
+    const key_count = l_keys.len + m_keys.len + r_keys.len;
+    for (keys[0..key_count]) |key| {
+        register_keys(fd, key);
     }
 
-    _ = c.memset(&usetup, 0, @sizeOf(c.uinput_setup));
-    usetup.id.bustype = c.BUS_USB;
-    usetup.id.vendor = 69;
-    usetup.id.product = 420;
-    _ = c.strcpy(&usetup.name, "Pedol");
-
-    // create the Pedol device
-    var res = c.ioctl(fd, c.UI_DEV_SETUP, &usetup);
-    if (res < 0) die(res, "ioctl: UI_DEV_SETUP");
-    res = c.ioctl(fd, c.UI_DEV_CREATE);
-    if (res < 0) die(res, "ioctl: UI_DEV_CREATE");
+    _ = create_pedol_device(fd);
     defer c.ioctl(fd, c.UI_DEV_DESTROY);
 
     std.time.sleep(10);
     while (true) {
-        std.time.sleep(5);
-        const event = pedal.poll_event();
-        if (event == null) continue;
-        switch (event.?) {
-            .press_left => {
-                for (l_key) |key| {
-                    emit(fd, c.EV_KEY, key, 1);
-                    emit(fd, c.EV_SYN, c.SYN_REPORT, 0);
-                }
-            },
-            .release_left => {
-                for (l_key) |key| {
-                    emit(fd, c.EV_KEY, key, 0);
-                    emit(fd, c.EV_SYN, c.SYN_REPORT, 0);
-                }
-            },
-            .press_middle => {
-                for (m_key) |key| {
-                    emit(fd, c.EV_KEY, key, 1);
-                    emit(fd, c.EV_SYN, c.SYN_REPORT, 0);
-                }
-            },
-            .release_middle => {
-                for (m_key) |key| {
-                    emit(fd, c.EV_KEY, key, 0);
-                    emit(fd, c.EV_SYN, c.SYN_REPORT, 0);
-                }
-            },
-            .press_right => {
-                for (r_key) |key| {
-                    emit(fd, c.EV_KEY, key, 1);
-                    emit(fd, c.EV_SYN, c.SYN_REPORT, 0);
-                }
-            },
-            .release_right => {
-                for (r_key) |key| {
-                    emit(fd, c.EV_KEY, key, 0);
-                    emit(fd, c.EV_SYN, c.SYN_REPORT, 0);
-                }
-            },
+        const event = pedal.poll_event() orelse continue;
+        switch (event) {
+            .press_left => for (l_keys) |key| press_key(fd, key, 1),
+            .release_left => for (l_keys) |key| press_key(fd, key, 0),
+            .press_middle => for (m_keys) |key| press_key(fd, key, 1),
+            .release_middle => for (m_keys) |key| press_key(fd, key, 0),
+            .press_right => for (r_keys) |key| press_key(fd, key, 1),
+            .release_right => for (r_keys) |key| press_key(fd, key, 0),
         }
     }
 }
 
-fn register_key(fd: c_int, key: c_ushort) void {
-    var res = c.ioctl(fd, c.UI_SET_EVBIT, c.EV_KEY);
-    if (res < 0) die(res, "ioctl: UI_SET_EVBIT");
-    res = c.ioctl(fd, c.UI_SET_KEYBIT, key);
-    if (res < 0) die(res, "ioctl: UI_SET_KEYBIT");
+inline fn create_pedol_device(fd: c_int) c.uinput_setup {
+    var usetup: c.uinput_setup = std.mem.zeroes(c.uinput_setup);
+    usetup.id.bustype = c.BUS_USB;
+    usetup.id.vendor = 69;
+    usetup.id.product = 420;
+    usetup.name[0] = 'P';
+    usetup.name[1] = 'e';
+    usetup.name[2] = 'd';
+    usetup.name[3] = 'o';
+    usetup.name[4] = 'l';
+    usetup.name[5] = 0;
+
+    assert_die(c.ioctl(fd, c.UI_DEV_SETUP, &usetup), "ioctl: UI_DEV_SETUP");
+    assert_die(c.ioctl(fd, c.UI_DEV_CREATE), "ioctl: UI_DEV_CREATE");
+    return usetup;
+}
+
+inline fn press_key(fd: c_int, key: c_ushort, val: c_int) void {
+    emit(fd, c.EV_KEY, key, val);
+    emit(fd, c.EV_SYN, c.SYN_REPORT, 0);
+}
+
+fn register_keys(fd: c_int, key: c_ushort) void {
+    assert_die(c.ioctl(fd, c.UI_SET_EVBIT, c.EV_KEY), "ioctl: UI_SET_EVBIT");
+    assert_die(c.ioctl(fd, c.UI_SET_KEYBIT, key), "ioctl: UI_SET_KEYBIT");
     std.time.sleep(5);
 }
 
 inline fn emit(fd: c_int, event_type: c_ushort, code: c_ushort, val: c_int) void {
-    var ie: c.input_event = undefined;
-
-    ie.type = event_type;
-    ie.code = code;
-    ie.value = val;
-    // timestamp values below are ignored
-    ie.time.tv_sec = 0;
-    ie.time.tv_usec = 0;
+    var ie: c.input_event = .{ .type = event_type, .code = code, .value = val, .time = .{
+        .tv_sec = 0,
+        .tv_usec = 0,
+    } };
 
     _ = c.write(fd, &ie, @sizeOf(c.input_event));
 }
 
-fn die(id: c_int, msg: []const u8) void {
+inline fn assert_die(id: c_int, msg: []const u8) void {
+    if (id > -1) return;
     std.debug.print("[{}]{s}\n", .{ id, msg });
     @panic("");
 }
@@ -132,60 +102,56 @@ fn init() !void {
     var config_parser = try toml.parseFile(std.heap.c_allocator, "./map.toml");
     defer config_parser.deinit();
 
-    config = try config_parser.parse();
+    var config = try config_parser.parse();
+    defer config.deinit();
+
     const left = config.keys.get("left").?;
-    const middle = config.keys.get("middle").?;
-    const right = config.keys.get("right").?;
     switch (left) {
         .Integer => |key| {
-            l_key = keys[0..1];
-            l_key[0] = @intCast(c_ushort, key);
+            l_keys = keys[0..1];
+            l_keys[0] = @intCast(c_ushort, key);
         },
         .Array => |key_array| {
             const len = key_array.items.len;
-            l_key = keys[0..len];
+            l_keys = keys[0..len];
 
-            for (key_array.items, 0..) |key, i| {
-                l_key[i] = @intCast(c_ushort, key.Integer);
-            }
+            for (key_array.items, 0..) |key, i| l_keys[i] = @intCast(c_ushort, key.Integer);
         },
-        else => @panic("left has an unsuporet type in map.toml"),
+        else => @panic("left has an unsupported type in map.toml"),
     }
 
+    const middle = config.keys.get("middle").?;
     switch (middle) {
         .Integer => |key| {
-            const offset = l_key.len;
-            m_key = keys[offset .. 1 + offset];
-            m_key[0] = @intCast(c_ushort, key);
+            const offset = l_keys.len;
+            m_keys = keys[offset .. 1 + offset];
+            m_keys[0] = @intCast(c_ushort, key);
         },
         .Array => |key_array| {
-            const offset = l_key.len;
+            const offset = l_keys.len;
             const len = key_array.items.len;
-            m_key = keys[offset .. len + offset];
+            m_keys = keys[offset .. len + offset];
 
-            for (key_array.items, 0..) |key, i| {
-                m_key[i] = @intCast(c_ushort, key.Integer);
-            }
+            for (key_array.items, 0..) |key, i| m_keys[i] = @intCast(c_ushort, key.Integer);
         },
-        else => @panic("middle has an unsuporet type in map.toml"),
+        else => @panic("middle has an unsupported type in map.toml"),
     }
 
+    const right = config.keys.get("right").?;
     switch (right) {
         .Integer => |key| {
-            const offset = l_key.len + m_key.len;
-            r_key = keys[offset .. 1 + offset];
-            r_key[0] = @intCast(c_ushort, key);
+            const offset = l_keys.len + m_keys.len;
+            r_keys = keys[offset .. 1 + offset];
+            r_keys[0] = @intCast(c_ushort, key);
         },
         .Array => |key_array| {
-            const offset = l_key.len + m_key.len;
+            const offset = l_keys.len + m_keys.len;
             const len = key_array.items.len;
-            r_key = keys[offset .. len + offset];
+            r_keys = keys[offset .. len + offset];
 
-            for (key_array.items, 0..) |key, i| {
-                r_key[i] = @intCast(c_ushort, key.Integer);
-            }
+            for (key_array.items, 0..) |key, i| r_keys[i] = @intCast(c_ushort, key.Integer);
         },
-        else => @panic("middle has an unsuporet type in map.toml"),
+        else => @panic("middle has an unsupported type in map.toml"),
     }
 
     vendor_id = @intCast(c_ushort, config.keys.get("vendor_id").?.Integer);
