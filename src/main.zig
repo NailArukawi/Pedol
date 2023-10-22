@@ -3,9 +3,10 @@ const toml = @import("toml.zig");
 const Pedal = @import("pedal.zig").Pedal;
 const PedalEvent = @import("pedal.zig").PedalEvent;
 
+const linux = std.os.linux;
+
 const c = @cImport({
     @cInclude("hidapi/hidapi.h");
-    @cInclude("unistd.h");
     @cInclude("linux/uinput.h");
 });
 
@@ -17,7 +18,7 @@ var r_keys: []c_ushort = undefined;
 var vendor_id: c_ushort = undefined;
 var product_id: c_ushort = undefined;
 
-pub fn main() !void {
+pub fn main() !noreturn {
     try init();
     defer deinit();
 
@@ -28,18 +29,17 @@ pub fn main() !void {
 
     // setup Viritual input
     const flags = std.os.linux.O.WRONLY | std.os.linux.O.NONBLOCK;
-    var fd = try std.os.open("/dev/uinput", flags, 0x777);
+    var fd = @as(c_int, @intCast(linux.open("/dev/uinput", flags, 0x644)));
 
     // register the peys Pedol can press
     const key_count = l_keys.len + m_keys.len + r_keys.len;
-    for (keys[0..key_count]) |key| {
-        register_keys(fd, key);
-    }
+    for (keys[0..key_count]) |key| register_keys(fd, key);
 
-    _ = create_pedol_device(fd);
-    defer c.ioctl(fd, c.UI_DEV_DESTROY);
+    var usetup: c.uinput_setup = undefined;
+    create_pedol_device(fd, &usetup);
+    defer std.debug.assert(linux.ioctl(fd, c.UI_DEV_DESTROY, 0) == 0);
 
-    std.time.sleep(10);
+    //std.time.sleep(10);
     while (true) {
         const event = pedal.poll_event() orelse continue;
         switch (event) {
@@ -53,8 +53,8 @@ pub fn main() !void {
     }
 }
 
-inline fn create_pedol_device(fd: c_int) c.uinput_setup {
-    var usetup: c.uinput_setup = std.mem.zeroes(c.uinput_setup);
+fn create_pedol_device(fd: c_int, usetup: *c.uinput_setup) void {
+    usetup.* = std.mem.zeroes(c.uinput_setup);
     usetup.id.bustype = c.BUS_USB;
     usetup.id.vendor = 69;
     usetup.id.product = 420;
@@ -65,20 +65,18 @@ inline fn create_pedol_device(fd: c_int) c.uinput_setup {
     usetup.name[4] = 'l';
     usetup.name[5] = 0;
 
-    assert_die(c.ioctl(fd, c.UI_DEV_SETUP, &usetup), "ioctl: UI_DEV_SETUP");
-    assert_die(c.ioctl(fd, c.UI_DEV_CREATE), "ioctl: UI_DEV_CREATE");
-    return usetup;
+    std.debug.assert(linux.ioctl(fd, c.UI_DEV_SETUP, @intFromPtr(usetup)) == 0);
+    std.debug.assert(linux.ioctl(fd, c.UI_DEV_CREATE, 0) == 0);
 }
 
-inline fn press_key(fd: c_int, key: c_ushort, val: c_int) void {
+fn press_key(fd: c_int, key: c_ushort, val: c_int) void {
     emit(fd, c.EV_KEY, key, val);
     emit(fd, c.EV_SYN, c.SYN_REPORT, 0);
 }
 
 fn register_keys(fd: c_int, key: c_ushort) void {
-    assert_die(c.ioctl(fd, c.UI_SET_EVBIT, c.EV_KEY), "ioctl: UI_SET_EVBIT");
-    assert_die(c.ioctl(fd, c.UI_SET_KEYBIT, key), "ioctl: UI_SET_KEYBIT");
-    std.time.sleep(5);
+    std.debug.assert(linux.ioctl(fd, c.UI_SET_EVBIT, c.EV_KEY) == 0);
+    std.debug.assert(linux.ioctl(fd, c.UI_SET_KEYBIT, key) == 0);
 }
 
 inline fn emit(fd: c_int, event_type: c_ushort, code: c_ushort, val: c_int) void {
@@ -87,13 +85,8 @@ inline fn emit(fd: c_int, event_type: c_ushort, code: c_ushort, val: c_int) void
         .tv_usec = 0,
     } };
 
-    _ = c.write(fd, &ie, @sizeOf(c.input_event));
-}
-
-inline fn assert_die(id: c_int, msg: []const u8) void {
-    if (id > -1) return;
-    std.debug.print("[{}]{s}\n", .{ id, msg });
-    @panic("");
+    var to_write = @as([*]u8, @ptrCast(&ie));
+    _ = linux.write(fd, to_write, @sizeOf(c.input_event));
 }
 
 fn init() !void {
@@ -109,15 +102,15 @@ fn init() !void {
     switch (left) {
         .Integer => |key| {
             l_keys = keys[0..1];
-            l_keys[0] = @intCast(c_ushort, key);
+            l_keys[0] = @as(c_ushort, @intCast(key));
         },
         .Array => |key_array| {
             const len = key_array.items.len;
             l_keys = keys[0..len];
 
-            for (key_array.items, 0..) |key, i| l_keys[i] = @intCast(c_ushort, key.Integer);
+            for (key_array.items, 0..) |key, i| l_keys[i] = @as(c_ushort, @intCast(key.Integer));
         },
-        else => @panic("left has an unsupported type in map.toml"),
+        else => @panic("left type is unsupported"),
     }
 
     const middle = config.keys.get("middle").?;
@@ -125,16 +118,16 @@ fn init() !void {
         .Integer => |key| {
             const offset = l_keys.len;
             m_keys = keys[offset .. 1 + offset];
-            m_keys[0] = @intCast(c_ushort, key);
+            m_keys[0] = @as(c_ushort, @intCast(key));
         },
         .Array => |key_array| {
             const offset = l_keys.len;
             const len = key_array.items.len;
             m_keys = keys[offset .. len + offset];
 
-            for (key_array.items, 0..) |key, i| m_keys[i] = @intCast(c_ushort, key.Integer);
+            for (key_array.items, 0..) |key, i| m_keys[i] = @as(c_ushort, @intCast(key.Integer));
         },
-        else => @panic("middle has an unsupported type in map.toml"),
+        else => @panic("middle type is unsupported"),
     }
 
     const right = config.keys.get("right").?;
@@ -142,20 +135,20 @@ fn init() !void {
         .Integer => |key| {
             const offset = l_keys.len + m_keys.len;
             r_keys = keys[offset .. 1 + offset];
-            r_keys[0] = @intCast(c_ushort, key);
+            r_keys[0] = @as(c_ushort, @intCast(key));
         },
         .Array => |key_array| {
             const offset = l_keys.len + m_keys.len;
             const len = key_array.items.len;
             r_keys = keys[offset .. len + offset];
 
-            for (key_array.items, 0..) |key, i| r_keys[i] = @intCast(c_ushort, key.Integer);
+            for (key_array.items, 0..) |key, i| r_keys[i] = @as(c_ushort, @intCast(key.Integer));
         },
-        else => @panic("middle has an unsupported type in map.toml"),
+        else => @panic("middle type is unsupported"),
     }
 
-    vendor_id = @intCast(c_ushort, config.keys.get("vendor_id").?.Integer);
-    product_id = @intCast(c_ushort, config.keys.get("product_id").?.Integer);
+    vendor_id = @as(c_ushort, @intCast(config.keys.get("vendor_id").?.Integer));
+    product_id = @as(c_ushort, @intCast(config.keys.get("product_id").?.Integer));
 }
 
 fn deinit() void {

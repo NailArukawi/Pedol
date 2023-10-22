@@ -97,6 +97,6 @@ const HIDHandle = struct {
     pub fn read(self: @This(), buffer: []u8) []u8 {
         const res = c.hid_read(self.inner, buffer.ptr, buffer.len);
 
-        return buffer[0..@intCast(usize, res)];
+        return buffer[0..@as(usize, @intCast(res))];
     }
 };
